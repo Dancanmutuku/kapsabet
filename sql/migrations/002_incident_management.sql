@@ -1,0 +1,11 @@
+USE kapsabet_tms;
+
+CREATE TABLE IF NOT EXISTS incident_review (
+ incident_id BIGINT PRIMARY KEY,
+ status VARCHAR(12) NOT NULL DEFAULT 'NEW' CHECK (status IN ('NEW','IN_PROGRESS','RESOLVED')),
+ review_note VARCHAR(1000) NULL,
+ reviewed_by BIGINT NULL,
+ updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ FOREIGN KEY (incident_id) REFERENCES incident(id) ON DELETE CASCADE,
+ FOREIGN KEY (reviewed_by) REFERENCES app_user(id)
+) ENGINE=InnoDB;
