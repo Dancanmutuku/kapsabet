@@ -6,7 +6,9 @@
 <nav><a href="index.php">Departures</a><a href="book.php">Reserve a seat</a><a href="feedback.php">Feedback</a>
 <?php if (user()): ?>
 <?php if (has_role('ADMIN')): ?><a href="management.php">Management</a><?php endif; ?>
-<?php if (has_role('ADMIN','OFFICIAL')): ?><a href="vehicles.php">Vehicles</a><a href="routes.php">Routes and Fares</a><a href="complaints.php">Complaints</a><a href="incidents.php">Incidents</a><a href="reports.php">Reports</a><?php endif; ?>
+<?php if (has_role('ADMIN','OFFICIAL')): ?><a href="vehicles.php">Vehicles</a><a href="routes.php">Routes and Fares</a><a href="complaints.php">Complaints</a><?php endif; ?>
 <?php if (has_role('ADMIN','OFFICIAL','CLERK','CONDUCTOR')): ?><a href="trips.php">Trips</a><?php endif; ?>
+<?php if (has_role('DRIVER','OWNER')): ?><a href="portal.php">My dashboard</a><?php endif; ?>
+<a href="account.php">My account</a>
 <a href="logout.php">Log out (<?= e(user()['username']) ?>)</a>
 <?php else: ?><a href="login.php">Staff login</a><?php endif; ?></nav></header><main>

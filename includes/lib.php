@@ -96,11 +96,12 @@ function open_trip(PDO $pdo, int $queue_id, int $driver, int $conductor, int $ro
     if (!$qe) throw new RuntimeException('Queue entry is not waiting');
     $front = q($pdo, "SELECT MIN(queue_position) AS m FROM queue_entry WHERE stage_id=? AND queue_date=? AND status='WAITING'", [$qe['stage_id'], $qe['queue_date']])->fetch()['m'];
     if ((int)$front !== (int)$qe['queue_position']) throw new RuntimeException('Only the vehicle at the front of the queue can open a trip');
-    $crew = q($pdo, "SELECT c.id,c.crew_type,u.status FROM crew_member c JOIN app_user u ON u.id=c.user_id WHERE c.id IN (?,?)", [$driver, $conductor])->fetchAll();
+    $crew = q($pdo, "SELECT c.id,c.crew_type,u.status,r.role_name FROM crew_member c
+                     JOIN app_user u ON u.id=c.user_id JOIN role r ON r.id=u.role_id WHERE c.id IN (?,?)", [$driver, $conductor])->fetchAll();
     $byId = [];
     foreach ($crew as $member) $byId[(int)$member['id']] = $member;
-    if (($byId[$driver]['crew_type'] ?? null) !== 'DRIVER' || ($byId[$driver]['status'] ?? null) !== 'ACTIVE'
-        || ($byId[$conductor]['crew_type'] ?? null) !== 'CONDUCTOR' || ($byId[$conductor]['status'] ?? null) !== 'ACTIVE') {
+    if (($byId[$driver]['crew_type'] ?? null) !== 'DRIVER' || ($byId[$driver]['role_name'] ?? null) !== 'DRIVER' || ($byId[$driver]['status'] ?? null) !== 'ACTIVE'
+        || ($byId[$conductor]['crew_type'] ?? null) !== 'CONDUCTOR' || ($byId[$conductor]['role_name'] ?? null) !== 'CONDUCTOR' || ($byId[$conductor]['status'] ?? null) !== 'ACTIVE') {
         throw new RuntimeException('Select an active driver and conductor with the correct crew roles');
     }
     $route = q($pdo, "SELECT origin_stage_id FROM route WHERE id=?", [$route_id])->fetch();
@@ -129,6 +130,9 @@ function confirm_departure(PDO $pdo, int $trip_id, float $fee, int $uid): void {
     if ($own) $pdo->beginTransaction();
     try {
         $reservations = q($pdo, "SELECT id FROM booking WHERE trip_id=? AND status='CONFIRMED' AND channel='ONLINE'", [$trip_id])->fetchAll(PDO::FETCH_COLUMN);
+        q($pdo, "UPDATE payment p JOIN booking b ON b.id=p.booking_id
+                 SET p.status='REVERSED'
+                 WHERE b.trip_id=? AND b.status='CONFIRMED' AND b.channel='ONLINE' AND p.status='SUCCESS'", [$trip_id]);
         q($pdo, "UPDATE booking SET status='EXPIRED' WHERE trip_id=? AND status='CONFIRMED' AND channel='ONLINE'", [$trip_id]);
         foreach ($reservations as $booking_id) audit($pdo, $uid, 'UPDATE', 'booking', (int)$booking_id, ['status' => 'CONFIRMED'], ['status' => 'EXPIRED']);
         q($pdo, "UPDATE trip SET status='DEPARTED', departure_time=NOW() WHERE id=?", [$trip_id]);
@@ -153,16 +157,13 @@ function add_boarding(PDO $pdo, int $trip_id, int $seat, string $method, int $ui
     $t = q($pdo, "SELECT t.*, v.seat_capacity FROM trip t JOIN vehicle v ON v.id=t.vehicle_id WHERE t.id=?", [$trip_id])->fetch();
     if (!$t || $t['status'] !== 'LOADING') throw new RuntimeException('Trip is not open for boarding');
     if (seats_left($pdo, $trip_id) <= 0) {
-        q($pdo, "INSERT INTO incident (vehicle_id,trip_id,reported_by,incident_type,description) VALUES (?,?,?,'OVERLOAD','Boarding beyond seat capacity blocked')", [$t['vehicle_id'], $trip_id, $uid]);
-        throw new RuntimeException('Vehicle is full. Attempt logged as a possible overloading event');
+        throw new RuntimeException('Vehicle is full. Boarding was blocked.');
     }
     if ($seat < 1 || $seat > (int)$t['seat_capacity']) throw new InvalidArgumentException('Invalid seat number');
     if (!in_array($method, ['MPESA', 'CASH'], true)) throw new InvalidArgumentException('Invalid payment method');
     if ($method === 'MPESA') {
-        $mpesa = strtoupper(trim((string)$mpesa));
-        if (!preg_match('/^[A-Z0-9]{10}$/', $mpesa)) throw new InvalidArgumentException('M-Pesa code must be 10 letters or digits');
-        if (q($pdo, "SELECT id FROM payment WHERE mpesa_receipt_no=?", [$mpesa])->fetch()) throw new RuntimeException('This M-Pesa code has already been used');
-    } else { $mpesa = null; }
+        if (trim((string)$mpesa) !== '') throw new InvalidArgumentException('Demo mode does not accept real M-Pesa receipt codes');
+    }
     $fare = current_fare($pdo, (int)$t['route_id']);
     if ($fare === null) throw new RuntimeException('No approved fare for this route');
     $own = !$pdo->inTransaction();
@@ -170,8 +171,8 @@ function add_boarding(PDO $pdo, int $trip_id, int $seat, string $method, int $ui
     try {
         q($pdo, "INSERT INTO booking (trip_id,seat_no,channel,fare_amount,status,created_by,client_uuid) VALUES (?,?,'CONDUCTOR',?,'BOARDED',?,?)", [$trip_id, $seat, $fare, $uid, $uuid]);
         $bid = (int)$pdo->lastInsertId();
-        $rc = 'RC' . date('ymd') . str_pad((string)$bid, 6, '0', STR_PAD_LEFT);
-        q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,mpesa_receipt_no,receipt_no,recorded_by) VALUES (?,?,?,?,?,?,?)", [$trip_id, $bid, $fare, $method, $mpesa, $rc, $uid]);
+        $rc = 'DEMO' . date('ymd') . str_pad((string)$bid, 6, '0', STR_PAD_LEFT);
+        q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,mpesa_receipt_no,receipt_no,recorded_by) VALUES (?,?,?, ?,NULL,?,?)", [$trip_id, $bid, $fare, $method, $rc, $uid]);
         audit($pdo, $uid, 'CREATE', 'booking', $bid, null, ['seat' => $seat, 'fare' => $fare, 'method' => $method]);
         if ($own) $pdo->commit();
         return ['booking_id' => $bid, 'receipt_no' => $rc, 'fare' => $fare];
@@ -209,8 +210,10 @@ function add_demo_reservation(PDO $pdo, int $trip_id, int $seat, string $name, s
         q($pdo, "INSERT INTO booking (trip_id,passenger_id,seat_no,channel,fare_amount,status,client_uuid)
                  VALUES (?,?,?,'ONLINE',?,'CONFIRMED',?)", [$trip_id, $passenger, $seat, $fare, $uuid]);
         $booking = (int)$pdo->lastInsertId();
-        $reference = 'RSV' . str_pad((string)$booking, 8, '0', STR_PAD_LEFT);
-        audit($pdo, null, 'CREATE', 'booking', $booking, null, ['seat' => $seat, 'fare' => $fare, 'channel' => 'ONLINE']);
+        $reference = 'DEMO' . date('ymd') . str_pad((string)$booking, 6, '0', STR_PAD_LEFT);
+        q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,status,receipt_no)
+                 VALUES (?,?,?,'MPESA','SUCCESS',?)", [$trip_id, $booking, $fare, $reference]);
+        audit($pdo, null, 'CREATE', 'booking', $booking, null, ['seat' => $seat, 'fare' => $fare, 'channel' => 'ONLINE', 'payment' => 'DEMO']);
         if ($own) $pdo->commit();
         return ['booking_id' => $booking, 'reference' => $reference, 'fare' => $fare];
     } catch (Throwable $t) {
@@ -229,13 +232,58 @@ function check_in_reservation(PDO $pdo, int $trip_id, int $booking_id, int $uid)
         $t = q($pdo, "SELECT id,status FROM trip WHERE id=? FOR UPDATE", [$trip_id])->fetch();
         $b = q($pdo, "SELECT id,fare_amount FROM booking WHERE id=? AND trip_id=? AND channel='ONLINE' AND status='CONFIRMED' FOR UPDATE", [$booking_id, $trip_id])->fetch();
         if (!$t || $t['status'] !== 'LOADING' || !$b) throw new RuntimeException('Reservation is no longer available for check-in');
+        $payment = q($pdo, "SELECT receipt_no FROM payment WHERE booking_id=? AND status='SUCCESS' ORDER BY id DESC LIMIT 1", [$booking_id])->fetch();
+        if ($payment) {
+            $receipt = $payment['receipt_no'];
+        } else {
+            $receipt = 'DEMO' . date('ymd') . str_pad((string)$booking_id, 6, '0', STR_PAD_LEFT);
+            q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,status,receipt_no)
+                     VALUES (?,?,?,'MPESA','SUCCESS',?)", [$trip_id, $booking_id, $b['fare_amount'], $receipt]);
+        }
         q($pdo, "UPDATE booking SET status='BOARDED' WHERE id=?", [$booking_id]);
-        $receipt = 'DEMO' . date('ymd') . str_pad((string)$booking_id, 6, '0', STR_PAD_LEFT);
-        q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,status,receipt_no)
-                 VALUES (?,?,?,'MPESA','SUCCESS',?)", [$trip_id, $booking_id, $b['fare_amount'], $receipt]);
         audit($pdo, $uid, 'UPDATE', 'booking', $booking_id, ['status' => 'CONFIRMED'], ['status' => 'BOARDED', 'payment' => 'DEMO']);
         if ($own) $pdo->commit();
         return $receipt;
+    } catch (Throwable $t) {
+        if ($own) $pdo->rollBack();
+        throw $t;
+    }
+}
+
+function find_demo_reservation(PDO $pdo, string $reference, string $phone): ?array {
+    $phone = normalize_phone($phone);
+    if (!$phone || !preg_match('/^DEMO[A-Z0-9]+$/', strtoupper(trim($reference)))) return null;
+    $r = q($pdo, "SELECT b.id AS booking_id,b.trip_id,b.seat_no,b.fare_amount,b.status AS booking_status,
+                  t.status AS trip_status,t.scheduled_departure,p.status AS payment_status,p.receipt_no,
+                  CONCAT(o.stage_name,' to ',d.stage_name) AS route_name
+                  FROM booking b JOIN passenger ps ON ps.id=b.passenger_id
+                  JOIN trip t ON t.id=b.trip_id JOIN payment p ON p.booking_id=b.id
+                  JOIN route rt ON rt.id=t.route_id JOIN stage o ON o.id=rt.origin_stage_id
+                  JOIN stage d ON d.id=rt.dest_stage_id
+                  WHERE b.channel='ONLINE' AND p.receipt_no=? AND ps.phone_no=?
+                  ORDER BY p.id DESC LIMIT 1", [strtoupper(trim($reference)), $phone])->fetch();
+    return $r ?: null;
+}
+
+function cancel_demo_reservation(PDO $pdo, string $reference, string $phone): void {
+    $reference = strtoupper(trim($reference));
+    $phone = normalize_phone($phone);
+    if (!$phone || !preg_match('/^DEMO[A-Z0-9]+$/', $reference)) throw new InvalidArgumentException('Reservation reference or phone number is invalid');
+    $own = !$pdo->inTransaction();
+    if ($own) $pdo->beginTransaction();
+    try {
+        $r = q($pdo, "SELECT b.id,b.trip_id,t.status AS trip_status,p.id AS payment_id,p.status AS payment_status
+                      FROM booking b JOIN passenger ps ON ps.id=b.passenger_id
+                      JOIN trip t ON t.id=b.trip_id JOIN payment p ON p.booking_id=b.id
+                      WHERE b.channel='ONLINE' AND b.status='CONFIRMED' AND p.receipt_no=? AND ps.phone_no=?
+                      FOR UPDATE", [$reference, $phone])->fetch();
+        if (!$r || $r['trip_status'] !== 'LOADING' || $r['payment_status'] !== 'SUCCESS') {
+            throw new RuntimeException('Reservation cannot be cancelled; check the reference, phone number, and trip status');
+        }
+        q($pdo, "UPDATE payment SET status='REVERSED' WHERE id=?", [$r['payment_id']]);
+        q($pdo, "UPDATE booking SET status='CANCELLED' WHERE id=?", [$r['id']]);
+        audit($pdo, null, 'UPDATE', 'booking', (int)$r['id'], ['status' => 'CONFIRMED'], ['status' => 'CANCELLED', 'payment' => 'DEMO_REVERSED']);
+        if ($own) $pdo->commit();
     } catch (Throwable $t) {
         if ($own) $pdo->rollBack();
         throw $t;
@@ -250,6 +298,7 @@ function cancel_reservation(PDO $pdo, int $trip_id, int $booking_id, int $uid): 
         $b = q($pdo, "SELECT id FROM booking WHERE id=? AND trip_id=? AND channel='ONLINE' AND status='CONFIRMED' FOR UPDATE",
           [$booking_id, $trip_id])->fetch();
         if (!$t || $t['status'] !== 'LOADING' || !$b) throw new RuntimeException('Reservation is no longer available for cancellation');
+        q($pdo, "UPDATE payment SET status='REVERSED' WHERE booking_id=? AND status='SUCCESS'", [$booking_id]);
         q($pdo, "UPDATE booking SET status='CANCELLED' WHERE id=?", [$booking_id]);
         audit($pdo, $uid, 'UPDATE', 'booking', $booking_id, ['status' => 'CONFIRMED'], ['status' => 'CANCELLED']);
         if ($own) $pdo->commit();

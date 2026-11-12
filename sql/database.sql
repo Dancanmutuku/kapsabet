@@ -86,16 +86,6 @@ CREATE TABLE feedback (
  CHECK (trip_id IS NOT NULL OR vehicle_id IS NOT NULL),
  FOREIGN KEY (trip_id) REFERENCES trip(id), FOREIGN KEY (vehicle_id) REFERENCES vehicle(id),
  FOREIGN KEY (passenger_id) REFERENCES passenger(id)) ENGINE=InnoDB;
-CREATE TABLE incident (
- id BIGINT AUTO_INCREMENT PRIMARY KEY, vehicle_id BIGINT NOT NULL, trip_id BIGINT NULL, reported_by BIGINT NULL,
- incident_type VARCHAR(15) NOT NULL, description VARCHAR(1000), reported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
- FOREIGN KEY (vehicle_id) REFERENCES vehicle(id), FOREIGN KEY (trip_id) REFERENCES trip(id)) ENGINE=InnoDB;
-CREATE TABLE incident_review (
- incident_id BIGINT PRIMARY KEY, status VARCHAR(12) NOT NULL DEFAULT 'NEW' CHECK (status IN ('NEW','IN_PROGRESS','RESOLVED')),
- review_note VARCHAR(1000) NULL, reviewed_by BIGINT NULL,
- updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
- FOREIGN KEY (incident_id) REFERENCES incident(id) ON DELETE CASCADE,
- FOREIGN KEY (reviewed_by) REFERENCES app_user(id)) ENGINE=InnoDB;
 CREATE TABLE audit_log (
  id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NULL, action VARCHAR(10) NOT NULL, table_name VARCHAR(40),
  record_id BIGINT, old_values JSON NULL, new_values JSON NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB;

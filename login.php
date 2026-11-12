@@ -16,7 +16,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         session_regenerate_id(true);
         $_SESSION['user'] = ['id' => (int)$u['id'], 'username' => $u['username'], 'name' => $u['full_name'], 'role' => $u['role_name']];
         audit($pdo, (int)$u['id'], 'LOGIN', 'app_user', (int)$u['id']);
-        header('Location: ' . (in_array($u['role_name'], ['CLERK', 'CONDUCTOR']) ? 'trips.php' : 'vehicles.php')); exit;
+        $destination = in_array($u['role_name'], ['CLERK', 'CONDUCTOR'], true) ? 'trips.php'
+            : (in_array($u['role_name'], ['DRIVER', 'OWNER'], true) ? 'portal.php' : 'vehicles.php');
+        header('Location: ' . $destination); exit;
     }
 }
 $title = 'Staff login'; include 'includes/header.php'; ?>

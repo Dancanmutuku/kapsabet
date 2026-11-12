@@ -25,5 +25,5 @@ $title = 'Vehicles'; include 'includes/header.php'; ?>
 <table id="vtable"><thead><tr><th>Reg no</th><th>Owner</th><th>Seats</th><th>Compliance</th></tr></thead><tbody>
 <?php foreach ($vehicles as $v): ?><tr><td><?= e($v['reg_no']) ?></td><td><?= e($v['owner']) ?></td><td><?= (int)$v['seat_capacity'] ?></td><td><?= e(compliance_status($pdo, (int)$v['id'])) ?></td></tr><?php endforeach; ?>
 </tbody></table></div></div>
-<p>An expired or missing document blocks queue registration.</p>
+
 <?php include 'includes/footer.php';
