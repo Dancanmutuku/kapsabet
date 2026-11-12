@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 $pdo = db(); $msg = $err = '';
+ensure_daily_trips($pdo);
 $lookup = null; $lookupReference = (string)($_POST['reference'] ?? ''); $lookupPhone = (string)($_POST['phone'] ?? '');
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     check_csrf();
@@ -26,12 +27,11 @@ $trips = q($pdo, "SELECT t.id, t.scheduled_departure, v.reg_no, v.seat_capacity,
                    WHERE b.trip_id=t.id AND b.status IN ('HELD','CONFIRMED','BOARDED')) AS taken_seats
                   FROM trip t JOIN vehicle v ON v.id=t.vehicle_id JOIN route r ON r.id=t.route_id
                   JOIN stage o ON o.id=r.origin_stage_id JOIN stage d ON d.id=r.dest_stage_id
-                  WHERE t.status='LOADING' AND t.scheduled_departure>=NOW()
+                  WHERE t.status IN ('SCHEDULED','LOADING') AND t.scheduled_departure>=NOW()
                   ORDER BY t.scheduled_departure")->fetchAll();
 $selectedTrip = (int)($_POST['trip'] ?? 0);
 $title = 'Book or cancel a seat'; include 'includes/header.php'; ?>
 <h1>Book or cancel a seat</h1>
-<p>Simulated payments only: no payment provider is contacted and no money is moved or collected.</p>
 <?php if ($msg): ?><div class="msg"><?= e($msg) ?></div><?php endif; if ($err): ?><div class="err"><?= e($err) ?></div><?php endif; ?>
 <?php if ($trips): ?>
 <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="reserve">
@@ -42,7 +42,7 @@ $title = 'Book or cancel a seat'; include 'includes/header.php'; ?>
 <label>Passenger name</label><input name="name" maxlength="100" required>
 <label>Phone number</label><input name="phone" placeholder="07XX XXX XXX" required>
 <label><input type="checkbox" name="consent" required> I consent to storing my name and phone number for this reservation.</label>
-<button>Book and pay (simulated)</button></form>
+<button>Book and pay</button></form>
 <script>
 (function () {
   var trip = document.getElementById('trip'), seat = document.getElementById('seat');
@@ -73,7 +73,7 @@ $title = 'Book or cancel a seat'; include 'includes/header.php'; ?>
 <?php if ($lookup): ?><h3>Reservation details</h3>
 <p>Trip <?= (int)$lookup['trip_id'] ?> - <?= e($lookup['route_name']) ?> - <?= e(date('Y-m-d H:i', strtotime($lookup['scheduled_departure']))) ?> - Seat <?= (int)$lookup['seat_no'] ?> - Fare KES <?= number_format((float)$lookup['fare_amount'], 2) ?></p>
 <p>Reservation: <?= e($lookup['booking_status']) ?> | Simulated payment: <?= e($lookup['payment_status']) ?> | Receipt: <?= e($lookup['receipt_no']) ?></p>
-<?php if ($lookup['booking_status'] === 'CONFIRMED' && $lookup['trip_status'] === 'LOADING'): ?>
+<?php if ($lookup['booking_status'] === 'CONFIRMED' && in_array($lookup['trip_status'], ['SCHEDULED', 'LOADING'], true)): ?>
 <form method="post" data-confirm="Cancel this reservation? The simulated payment will be reversed."><?= csrf_field() ?><input type="hidden" name="action" value="cancel">
 <input type="hidden" name="reference" value="<?= e($lookupReference) ?>"><input type="hidden" name="phone" value="<?= e($lookupPhone) ?>">
 <button>Cancel booking</button></form>

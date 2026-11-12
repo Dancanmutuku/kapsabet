@@ -9,15 +9,14 @@
 5. In a command prompt opened in the project folder, run `C:\xampp\php\php.exe seed_data.php`. This CLI-only script inserts sample accounts, vehicles, and (when the queue is clear) an upcoming trip. It does not overwrite existing user or vehicle records.
 6. Open http://localhost/kapsabet_tms/ . New sample accounts: admin, official, clerk, conductor, driver, owner (password `Pass@1234`).
 
-## Run the tests
-Command prompt in the project folder: `C:\xampp\php\php.exe tests\run_tests.php`
-(Run `seed_data.php` first. Tests run inside a transaction and roll back.)
+For an existing installation, import `sql/migrations/003_daily_timetable.sql` once using phpMyAdmin before opening the application. Do not re-import `sql/database.sql` into an existing database.
+
 
 ## Modules
 Vehicle registration (vehicles.php), route and fare management (routes.php), queue, trip and boarding (trips.php),
 passenger departure search and reservations (index.php, book.php), staff/fleet/route management (management.php),
 feedback and complaint handling (feedback.php, complaints.php), role-based staff login, and password changes (account.php).
 
-All fares and payments are simulated records. The system does not contact M-Pesa or any payment provider, accept real payment references, move money, or collect cash. Simulated receipts are stored in MySQL; passengers can look up and cancel eligible reservations using the receipt reference and phone number. Cancellation and no-show expiry reverse the simulated payment.
+The daily timetable runs four trips every day: 06:00 Kapsabet to Eldoret, 10:00 Eldoret to Kapsabet, 14:00 Kapsabet to Eldoret, and 18:00 Eldoret to Kapsabet. The first active, compliant vehicle and active driver/conductor are assigned when the timetable is initialized. Upcoming trip records are generated for 30 days; staff start each scheduled trip from the Trips page before boarding.
 
-The database contains seeded roles, routes, fares, staff accounts, vehicles, and vehicle documents. New sample accounts created by `seed_data.php` share the password `Pass@1234`; change the passwords from My account before using the system beyond a private test.
+All fares and payments are simulated records. The system does not contact M-Pesa or any payment provider, accept real payment references, move money, or collect cash. Simulated receipts are stored in MySQL; passengers can look up and cancel eligible reservations using the receipt reference and phone number. Cancellation and no-show expiry reverse the simulated payment.

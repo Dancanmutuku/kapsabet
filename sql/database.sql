@@ -1,7 +1,7 @@
 CREATE DATABASE IF NOT EXISTS kapsabet_tms CHARACTER SET utf8mb4;
 USE kapsabet_tms;
 SET FOREIGN_KEY_CHECKS=0;
-DROP TABLE IF EXISTS audit_log, incident_review, incident, feedback, payment, booking, passenger, trip, queue_entry, crew_member, vehicle_document, vehicle, fare, route, stage, app_user, role;
+DROP TABLE IF EXISTS audit_log, incident_review, incident, feedback, payment, booking, passenger, trip, queue_entry, trip_schedule, crew_member, vehicle_document, vehicle, fare, route, stage, app_user, role;
 SET FOREIGN_KEY_CHECKS=1;
 
 CREATE TABLE role (id SMALLINT AUTO_INCREMENT PRIMARY KEY, role_name VARCHAR(30) NOT NULL UNIQUE) ENGINE=InnoDB;
@@ -37,6 +37,14 @@ CREATE TABLE crew_member (
  id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL UNIQUE,
  crew_type VARCHAR(10) NOT NULL CHECK (crew_type IN ('DRIVER','CONDUCTOR')),
  licence_no VARCHAR(30) UNIQUE, FOREIGN KEY (user_id) REFERENCES app_user(id)) ENGINE=InnoDB;
+CREATE TABLE trip_schedule (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY, route_id SMALLINT NOT NULL, departure_time TIME NOT NULL,
+ vehicle_id BIGINT NOT NULL, driver_id BIGINT NOT NULL, conductor_id BIGINT NOT NULL,
+ active BOOLEAN NOT NULL DEFAULT TRUE, created_by BIGINT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE (departure_time),
+ FOREIGN KEY (route_id) REFERENCES route(id), FOREIGN KEY (vehicle_id) REFERENCES vehicle(id),
+ FOREIGN KEY (driver_id) REFERENCES crew_member(id), FOREIGN KEY (conductor_id) REFERENCES crew_member(id),
+ FOREIGN KEY (created_by) REFERENCES app_user(id)) ENGINE=InnoDB;
 CREATE TABLE queue_entry (
  id BIGINT AUTO_INCREMENT PRIMARY KEY, vehicle_id BIGINT NOT NULL, stage_id SMALLINT NOT NULL, registered_by BIGINT NOT NULL,
  queue_date DATE NOT NULL, queued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, queue_position INT NOT NULL,
@@ -47,14 +55,17 @@ CREATE TABLE queue_entry (
  FOREIGN KEY (vehicle_id) REFERENCES vehicle(id), FOREIGN KEY (stage_id) REFERENCES stage(id),
  FOREIGN KEY (registered_by) REFERENCES app_user(id)) ENGINE=InnoDB;
 CREATE TABLE trip (
- id BIGINT AUTO_INCREMENT PRIMARY KEY, queue_id BIGINT NULL UNIQUE, vehicle_id BIGINT NOT NULL, route_id SMALLINT NOT NULL,
+ id BIGINT AUTO_INCREMENT PRIMARY KEY, queue_id BIGINT NULL UNIQUE, schedule_id BIGINT NULL,
+ vehicle_id BIGINT NOT NULL, route_id SMALLINT NOT NULL,
  driver_id BIGINT NOT NULL, conductor_id BIGINT NOT NULL, scheduled_departure DATETIME NOT NULL,
- departure_time DATETIME NULL, arrival_time DATETIME NULL, expected_revenue DECIMAL(10,2) NULL, counted_cash DECIMAL(10,2) NULL,
+ departure_time DATETIME NULL, arrival_time DATETIME NULL, stage_fee DECIMAL(8,2) NULL,
+ expected_revenue DECIMAL(10,2) NULL, counted_cash DECIMAL(10,2) NULL,
  recon_status VARCHAR(10) NOT NULL DEFAULT 'PENDING' CHECK (recon_status IN ('PENDING','RECONCILED','MISMATCH')),
  status VARCHAR(10) NOT NULL DEFAULT 'LOADING' CHECK (status IN ('SCHEDULED','LOADING','DEPARTED','CLOSED')),
+ UNIQUE (schedule_id, scheduled_departure),
  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
  FOREIGN KEY (queue_id) REFERENCES queue_entry(id), FOREIGN KEY (vehicle_id) REFERENCES vehicle(id),
- FOREIGN KEY (route_id) REFERENCES route(id), FOREIGN KEY (driver_id) REFERENCES crew_member(id),
+ FOREIGN KEY (schedule_id) REFERENCES trip_schedule(id), FOREIGN KEY (route_id) REFERENCES route(id), FOREIGN KEY (driver_id) REFERENCES crew_member(id),
  FOREIGN KEY (conductor_id) REFERENCES crew_member(id)) ENGINE=InnoDB;
 CREATE TABLE passenger (
  id BIGINT AUTO_INCREMENT PRIMARY KEY, full_name VARCHAR(100), phone_no VARCHAR(13) NOT NULL UNIQUE,

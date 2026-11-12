@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 $pdo = db();
+ensure_daily_trips($pdo);
 $routes = q($pdo, "SELECT r.id, CONCAT(o.stage_name,' to ',d.stage_name) AS name FROM route r JOIN stage o ON o.id=r.origin_stage_id JOIN stage d ON d.id=r.dest_stage_id")->fetchAll();
 $rid = (int)($_GET['route'] ?? 0);
 $date = $_GET['date'] ?? date('Y-m-d');
@@ -10,7 +11,8 @@ $sql = "SELECT t.id, t.scheduled_departure, t.status, v.reg_no, v.seat_capacity,
         WHERE t.status IN ('LOADING','SCHEDULED') AND DATE(t.scheduled_departure)=?" . ($rid ? " AND t.route_id=?" : "") . " ORDER BY t.scheduled_departure";
 $trips = q($pdo, $sql, $rid ? [$date, $rid] : [$date])->fetchAll();
 $title = 'Departures'; include 'includes/header.php'; ?>
-<h1>Departures and seat availability</h1>
+<h1>Daily timetable and seat availability</h1>
+<p>Four departures run every day: 06:00 Kapsabet to Eldoret, 10:00 Eldoret to Kapsabet, 14:00 Kapsabet to Eldoret, and 18:00 Eldoret to Kapsabet.</p>
 <form method="get" class="row">
 <div><label>Direction</label><select name="route"><option value="0">All</option>
 <?php foreach ($routes as $r): ?><option value="<?= $r['id'] ?>" <?= $rid == $r['id'] ? 'selected' : '' ?>><?= e($r['name']) ?></option><?php endforeach; ?></select></div>

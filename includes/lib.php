@@ -75,6 +75,101 @@ function add_vehicle(PDO $pdo, int $owner, string $reg, string $model, int $seat
 }
 
 // Queue and dispatch (FR-07 to FR-11)
+function ensure_default_daily_schedule(PDO $pdo): int {
+    $count = (int)q($pdo, "SELECT COUNT(*) AS n FROM trip_schedule")->fetch()['n'];
+    if ($count > 0) return $count;
+
+    $routes = q($pdo, "SELECT r.id,o.stage_name AS origin,d.stage_name AS destination
+                       FROM route r JOIN stage o ON o.id=r.origin_stage_id JOIN stage d ON d.id=r.dest_stage_id")
+        ->fetchAll();
+    $routeIds = [];
+    foreach ($routes as $route) {
+        if ($route['origin'] === 'Kapsabet stage' && $route['destination'] === 'Eldoret stage') $routeIds['outbound'] = (int)$route['id'];
+        if ($route['origin'] === 'Eldoret stage' && $route['destination'] === 'Kapsabet stage') $routeIds['return'] = (int)$route['id'];
+    }
+    if (!isset($routeIds['outbound'], $routeIds['return'])) return 0;
+
+    $vehicleId = null;
+    foreach (q($pdo, "SELECT id FROM vehicle WHERE status='ACTIVE' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $status = compliance_status($pdo, (int)$id);
+        if ($status === 'VALID' || $status === 'EXPIRING') { $vehicleId = (int)$id; break; }
+    }
+    if ($vehicleId === null) return 0;
+
+    $crew = q($pdo, "SELECT c.id,c.crew_type FROM crew_member c
+                     JOIN app_user u ON u.id=c.user_id JOIN role r ON r.id=u.role_id
+                     WHERE u.status='ACTIVE' AND r.role_name=c.crew_type ORDER BY c.id")->fetchAll();
+    $driverId = $conductorId = null;
+    foreach ($crew as $member) {
+        if ($member['crew_type'] === 'DRIVER' && $driverId === null) $driverId = (int)$member['id'];
+        if ($member['crew_type'] === 'CONDUCTOR' && $conductorId === null) $conductorId = (int)$member['id'];
+    }
+    if ($driverId === null || $conductorId === null) return 0;
+
+    $slots = [
+        ['06:00:00', $routeIds['outbound']],
+        ['10:00:00', $routeIds['return']],
+        ['14:00:00', $routeIds['outbound']],
+        ['18:00:00', $routeIds['return']],
+    ];
+    $own = !$pdo->inTransaction();
+    if ($own) $pdo->beginTransaction();
+    try {
+        if ((int)q($pdo, "SELECT COUNT(*) AS n FROM trip_schedule")->fetch()['n'] === 0) {
+            foreach ($slots as [$time, $routeId]) {
+                q($pdo, "INSERT INTO trip_schedule (route_id,departure_time,vehicle_id,driver_id,conductor_id)
+                         VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+                    [$routeId, $time, $vehicleId, $driverId, $conductorId]);
+            }
+        }
+        if ($own) $pdo->commit();
+    } catch (Throwable $t) {
+        if ($own) $pdo->rollBack();
+        throw $t;
+    }
+    return (int)q($pdo, "SELECT COUNT(*) AS n FROM trip_schedule")->fetch()['n'];
+}
+
+function ensure_daily_trips(PDO $pdo, int $days = 30): int {
+    if ($days < 1 || $days > 60) throw new InvalidArgumentException('Daily trip generation must be between 1 and 60 days');
+    ensure_default_daily_schedule($pdo);
+    $schedules = q($pdo, "SELECT s.id,s.route_id,s.departure_time,s.vehicle_id,s.driver_id,s.conductor_id,
+                                 v.status AS vehicle_status, d.crew_type AS driver_type, du.status AS driver_status,
+                                 dr.role_name AS driver_role, c.crew_type AS conductor_type, cu.status AS conductor_status,
+                                 cr.role_name AS conductor_role
+                          FROM trip_schedule s JOIN vehicle v ON v.id=s.vehicle_id
+                          JOIN crew_member d ON d.id=s.driver_id JOIN app_user du ON du.id=d.user_id
+                          JOIN role dr ON dr.id=du.role_id
+                          JOIN crew_member c ON c.id=s.conductor_id JOIN app_user cu ON cu.id=c.user_id
+                          JOIN role cr ON cr.id=cu.role_id
+                          WHERE s.active=TRUE ORDER BY s.departure_time")->fetchAll();
+    if (!$schedules) return 0;
+
+    $clock = q($pdo, "SELECT CURDATE() AS today,NOW() AS now")->fetch();
+    $serviceDate = DateTimeImmutable::createFromFormat('!Y-m-d', $clock['today']);
+    if (!$serviceDate) throw new RuntimeException('Unable to determine the database service date');
+    $created = 0;
+    foreach ($schedules as $schedule) {
+        if ($schedule['vehicle_status'] !== 'ACTIVE' || !in_array(compliance_status($pdo, (int)$schedule['vehicle_id']), ['VALID', 'EXPIRING'], true)
+            || $schedule['driver_type'] !== 'DRIVER' || $schedule['driver_role'] !== 'DRIVER' || $schedule['driver_status'] !== 'ACTIVE'
+            || $schedule['conductor_type'] !== 'CONDUCTOR' || $schedule['conductor_role'] !== 'CONDUCTOR' || $schedule['conductor_status'] !== 'ACTIVE') {
+            continue;
+        }
+        for ($offset = 0; $offset < $days; $offset++) {
+            $date = $serviceDate->modify('+' . $offset . ' days')->format('Y-m-d');
+            $departure = $date . ' ' . $schedule['departure_time'];
+            if ($departure <= $clock['now']) continue;
+            $insert = q($pdo, "INSERT INTO trip (schedule_id,vehicle_id,route_id,driver_id,conductor_id,scheduled_departure,status)
+                               VALUES (?,?,?,?,?,?, 'SCHEDULED')
+                               ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
+                        [$schedule['id'], $schedule['vehicle_id'], $schedule['route_id'], $schedule['driver_id'],
+                         $schedule['conductor_id'], $departure]);
+            if ($insert->rowCount() === 1) $created++;
+        }
+    }
+    return $created;
+}
+
 function register_queue(PDO $pdo, int $vehicle_id, int $stage_id, int $uid): int {
     $v = q($pdo, "SELECT status FROM vehicle WHERE id=?", [$vehicle_id])->fetch();
     if (!$v || $v['status'] !== 'ACTIVE') throw new RuntimeException('Vehicle is not active');
@@ -135,9 +230,25 @@ function confirm_departure(PDO $pdo, int $trip_id, float $fee, int $uid): void {
                  WHERE b.trip_id=? AND b.status='CONFIRMED' AND b.channel='ONLINE' AND p.status='SUCCESS'", [$trip_id]);
         q($pdo, "UPDATE booking SET status='EXPIRED' WHERE trip_id=? AND status='CONFIRMED' AND channel='ONLINE'", [$trip_id]);
         foreach ($reservations as $booking_id) audit($pdo, $uid, 'UPDATE', 'booking', (int)$booking_id, ['status' => 'CONFIRMED'], ['status' => 'EXPIRED']);
-        q($pdo, "UPDATE trip SET status='DEPARTED', departure_time=NOW() WHERE id=?", [$trip_id]);
+        q($pdo, "UPDATE trip SET status='DEPARTED', departure_time=NOW(), stage_fee=? WHERE id=?", [$fee, $trip_id]);
         q($pdo, "UPDATE queue_entry SET status='DISPATCHED', stage_fee=? WHERE id=?", [$fee, $t['queue_id']]);
         audit($pdo, $uid, 'UPDATE', 'trip', $trip_id, ['status' => 'LOADING'], ['status' => 'DEPARTED']);
+        if ($own) $pdo->commit();
+    } catch (Throwable $t) {
+        if ($own) $pdo->rollBack();
+        throw $t;
+    }
+}
+function start_scheduled_trip(PDO $pdo, int $trip_id, int $uid): void {
+    $own = !$pdo->inTransaction();
+    if ($own) $pdo->beginTransaction();
+    try {
+        $trip = q($pdo, "SELECT status,scheduled_departure FROM trip WHERE id=? FOR UPDATE", [$trip_id])->fetch();
+        if (!$trip || $trip['status'] !== 'SCHEDULED' || substr($trip['scheduled_departure'], 0, 10) !== q($pdo, "SELECT CURDATE() AS today")->fetch()['today']) {
+            throw new RuntimeException('Only a scheduled trip for today can be started');
+        }
+        q($pdo, "UPDATE trip SET status='LOADING' WHERE id=?", [$trip_id]);
+        audit($pdo, $uid, 'UPDATE', 'trip', $trip_id, ['status' => 'SCHEDULED'], ['status' => 'LOADING']);
         if ($own) $pdo->commit();
     } catch (Throwable $t) {
         if ($own) $pdo->rollBack();
@@ -194,7 +305,8 @@ function add_simulated_reservation(PDO $pdo, int $trip_id, int $seat, string $na
     if ($own) $pdo->beginTransaction();
     try {
         $t = q($pdo, "SELECT t.*, v.seat_capacity FROM trip t JOIN vehicle v ON v.id=t.vehicle_id WHERE t.id=? FOR UPDATE", [$trip_id])->fetch();
-        if (!$t || $t['status'] !== 'LOADING' || strtotime($t['scheduled_departure']) < time()) {
+        $upcoming = $t ? (bool)q($pdo, "SELECT CAST(? AS DATETIME) >= NOW() AS is_upcoming", [$t['scheduled_departure']])->fetch()['is_upcoming'] : false;
+        if (!$t || !in_array($t['status'], ['SCHEDULED', 'LOADING'], true) || !$upcoming) {
             throw new RuntimeException('This trip is not available for reservations');
         }
         if ($seat < 1 || $seat > (int)$t['seat_capacity']) throw new InvalidArgumentException('Invalid seat number');
@@ -281,7 +393,7 @@ function cancel_simulated_reservation(PDO $pdo, string $reference, string $phone
                       JOIN trip t ON t.id=b.trip_id JOIN payment p ON p.booking_id=b.id
                       WHERE b.channel='ONLINE' AND b.status='CONFIRMED' AND p.receipt_no=? AND ps.phone_no=?
                       FOR UPDATE", [$reference, $phone])->fetch();
-        if (!$r || $r['trip_status'] !== 'LOADING' || $r['payment_status'] !== 'SUCCESS') {
+        if (!$r || !in_array($r['trip_status'], ['SCHEDULED', 'LOADING'], true) || $r['payment_status'] !== 'SUCCESS') {
             throw new RuntimeException('Reservation cannot be cancelled; check the reference, phone number, and trip status');
         }
         q($pdo, "UPDATE payment SET status='REVERSED' WHERE id=?", [$r['payment_id']]);
@@ -301,7 +413,7 @@ function cancel_reservation(PDO $pdo, int $trip_id, int $booking_id, int $uid): 
         $t = q($pdo, "SELECT status FROM trip WHERE id=? FOR UPDATE", [$trip_id])->fetch();
         $b = q($pdo, "SELECT id FROM booking WHERE id=? AND trip_id=? AND channel='ONLINE' AND status='CONFIRMED' FOR UPDATE",
           [$booking_id, $trip_id])->fetch();
-        if (!$t || $t['status'] !== 'LOADING' || !$b) throw new RuntimeException('Reservation is no longer available for cancellation');
+        if (!$t || !in_array($t['status'], ['SCHEDULED', 'LOADING'], true) || !$b) throw new RuntimeException('Reservation is no longer available for cancellation');
         q($pdo, "UPDATE payment SET status='REVERSED' WHERE booking_id=? AND status='SUCCESS'", [$booking_id]);
         q($pdo, "UPDATE booking SET status='CANCELLED' WHERE id=?", [$booking_id]);
         audit($pdo, $uid, 'UPDATE', 'booking', $booking_id, ['status' => 'CONFIRMED'], ['status' => 'CANCELLED']);
