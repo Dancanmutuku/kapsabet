@@ -8,8 +8,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($a === 'queue' && has_role('ADMIN', 'OFFICIAL', 'CLERK')) { register_queue($pdo, (int)$_POST['vehicle'], (int)$_POST['stage'], $uid); $msg = 'Vehicle added to the queue.'; }
         elseif ($a === 'open' && has_role('ADMIN', 'OFFICIAL', 'CLERK')) { open_trip($pdo, (int)$_POST['queue'], (int)$_POST['driver'], (int)$_POST['conductor'], (int)$_POST['route'], $_POST['sched'], $uid); $msg = 'Trip opened.'; }
         elseif ($a === 'depart' && has_role('ADMIN', 'OFFICIAL', 'CLERK')) { confirm_departure($pdo, (int)$_POST['trip'], (float)$_POST['fee'], $uid); $msg = 'Departure confirmed.'; }
-        elseif ($a === 'board' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')) { $r = add_boarding($pdo, (int)$_POST['trip'], (int)$_POST['seat'], $_POST['method'], $uid, $_POST['mpesa'] ?? null); $msg = 'Passenger recorded. DEMO receipt ' . $r['receipt_no'] . ', fare KES ' . number_format($r['fare'], 2) . '. No real payment was processed.'; }
-        elseif ($a === 'checkin' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')) { $receipt = check_in_reservation($pdo, (int)$_POST['trip'], (int)$_POST['booking'], $uid); $msg = 'Reservation checked in. DEMO receipt ' . $receipt . '; no real payment was processed.'; }
+        elseif ($a === 'board' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')) { $r = add_boarding($pdo, (int)$_POST['trip'], (int)$_POST['seat'], $_POST['method'], $uid, $_POST['mpesa'] ?? null); $msg = 'Passenger recorded. Simulated receipt ' . $r['receipt_no'] . ', fare KES ' . number_format($r['fare'], 2) . '. No real payment was processed.'; }
+        elseif ($a === 'checkin' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')) { $receipt = check_in_reservation($pdo, (int)$_POST['trip'], (int)$_POST['booking'], $uid); $msg = 'Reservation checked in. Simulated receipt ' . $receipt . '; no real payment was processed.'; }
         elseif ($a === 'cancel_reservation' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')) { cancel_reservation($pdo, (int)$_POST['trip'], (int)$_POST['booking'], $uid); $msg = 'Reservation cancelled.'; }
         elseif ($a === 'close' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')) { $s = close_trip($pdo, (int)$_POST['trip'], (float)$_POST['cash'], $uid); $msg = 'Trip closed. Reconciliation result: ' . $s; }
         else { throw new RuntimeException('Action not permitted for your role.'); }
@@ -44,25 +44,25 @@ $title = 'Trips'; include 'includes/header.php'; ?>
 <div style="border:1px solid #888;padding:8px;margin:8px 0">
 <strong>Trip <?= $t['id'] ?>: <?= e($t['reg_no']) ?></strong> (<?= e($t['status']) ?>), seats left <?= seats_left($pdo, (int)$t['id']) ?>
 <div class="seats"><?php for ($i = 1; $i <= 14; $i++): ?><span class="<?= in_array($i, $taken) ? 'taken' : '' ?>"><?= $i ?></span><?php endfor; ?></div>
-<?php if ($reservations): ?><h3>Online reservations (demo)</h3><table><thead><tr><th>Seat</th><th>Passenger</th><th>Fare</th><th>Action</th></tr></thead><tbody>
+<?php if ($reservations): ?><h3>Online reservations</h3><table><thead><tr><th>Seat</th><th>Passenger</th><th>Fare</th><th>Action</th></tr></thead><tbody>
 <?php foreach ($reservations as $r): ?><tr><td><?= (int)$r['seat_no'] ?></td><td><?= e($r['full_name']) ?></td><td>KES <?= number_format((float)$r['fare_amount'], 2) ?></td><td>
 <?php if ($t['status'] === 'LOADING' && has_role('ADMIN','OFFICIAL','CONDUCTOR')): ?>
-<form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="checkin"><input type="hidden" name="trip" value="<?= (int)$t['id'] ?>"><input type="hidden" name="booking" value="<?= (int)$r['id'] ?>"><button>Check in (demo)</button></form>
+<form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="checkin"><input type="hidden" name="trip" value="<?= (int)$t['id'] ?>"><input type="hidden" name="booking" value="<?= (int)$r['id'] ?>"><button>Check in</button></form>
 <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_reservation"><input type="hidden" name="trip" value="<?= (int)$t['id'] ?>"><input type="hidden" name="booking" value="<?= (int)$r['id'] ?>"><button>Cancel</button></form>
 <?php endif; ?></td></tr><?php endforeach; ?></tbody></table><?php endif; ?>
 <?php if ($t['status'] === 'LOADING' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')): ?>
 <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="board"><input type="hidden" name="trip" value="<?= $t['id'] ?>">
 <label>Seat</label><input type="number" name="seat" min="1" max="14" required>
-<label>Demo payment method (fare comes from the fare table)</label><select name="method" required><option value="CASH">DEMO cash</option><option value="MPESA">DEMO M-Pesa (simulated)</option></select>
+<label>Simulated payment method (fare comes from the fare table)</label><select name="method" required><option value="CASH">Simulated cash</option><option value="MPESA">Simulated M-Pesa</option></select>
 <p>No real cash or M-Pesa payment is collected. Do not enter real payment details.</p><button>Add passenger</button></form>
 <?php endif; ?>
 <?php if ($t['status'] === 'LOADING' && has_role('ADMIN', 'OFFICIAL', 'CLERK')): ?>
 <form method="post" data-confirm="Confirm departure?"><?= csrf_field() ?><input type="hidden" name="action" value="depart"><input type="hidden" name="trip" value="<?= $t['id'] ?>">
-<label>Demo stage fee (KES)</label><input type="number" step="0.01" min="0" name="fee" required><button>Confirm departure</button></form>
+<label>Simulated stage fee (KES)</label><input type="number" step="0.01" min="0" name="fee" required><button>Confirm departure</button></form>
 <?php endif; ?>
 <?php if ($t['status'] === 'DEPARTED' && has_role('ADMIN', 'OFFICIAL', 'CONDUCTOR')): ?>
 <form method="post" data-confirm="Close this trip?"><?= csrf_field() ?><input type="hidden" name="action" value="close"><input type="hidden" name="trip" value="<?= $t['id'] ?>">
-<label>Demo cash count (KES)</label><input type="number" step="0.01" min="0" name="cash" required><button>Close trip</button></form>
+<label>Simulated cash count (KES)</label><input type="number" step="0.01" min="0" name="cash" required><button>Close trip</button></form>
 <?php endif; ?></div>
 <?php endforeach; if (!$trips): ?><p>No open trips.</p><?php endif; ?>
 <?php include 'includes/footer.php';

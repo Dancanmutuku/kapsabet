@@ -9,12 +9,12 @@ $pdo = db();
 $roles = [];
 foreach (q($pdo, "SELECT id,role_name FROM role")->fetchAll() as $row) $roles[$row['role_name']] = (int)$row['id'];
 foreach (['ADMIN', 'OFFICIAL', 'CLERK', 'CONDUCTOR', 'DRIVER', 'OWNER'] as $name) {
-    if (!isset($roles[$name])) throw new RuntimeException('Import sql/database.sql before seeding demo data');
+    if (!isset($roles[$name])) throw new RuntimeException('Import sql/database.sql before creating sample data');
 }
 $stages = [];
 foreach (q($pdo, "SELECT id,stage_name FROM stage")->fetchAll() as $row) $stages[$row['stage_name']] = (int)$row['id'];
 if (!isset($stages['Kapsabet stage']) || !isset($stages['Eldoret stage'])) {
-    throw new RuntimeException('Import sql/database.sql before seeding demo data');
+    throw new RuntimeException('Import sql/database.sql before creating sample data');
 }
 $route = q($pdo, "SELECT id FROM route WHERE origin_stage_id=? AND dest_stage_id=?",
     [$stages['Kapsabet stage'], $stages['Eldoret stage']])->fetch();
@@ -35,7 +35,7 @@ try {
         list($role, $name, $username, $phone) = $account;
         $existing = q($pdo, "SELECT id,role_id FROM app_user WHERE username=?", [$username])->fetch();
         if ($existing) {
-            if ((int)$existing['role_id'] !== $roles[$role]) throw new RuntimeException('Existing demo username has an unexpected role: ' . $username);
+            if ((int)$existing['role_id'] !== $roles[$role]) throw new RuntimeException('Existing seeded username has an unexpected role: ' . $username);
             $users[$username] = (int)$existing['id'];
             continue;
         }
@@ -79,7 +79,7 @@ try {
     }
 
     $pdo->commit();
-    echo "Demo data is ready. Seeded records were not overwritten. Demo account passwords (new accounts only): Pass@1234.\n";
+    echo "Sample data is ready. Seeded records were not overwritten. Initial passwords for newly created accounts only: Pass@1234.\n";
 } catch (Throwable $t) {
     if ($pdo->inTransaction()) $pdo->rollBack();
     throw $t;

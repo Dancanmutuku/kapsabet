@@ -21,5 +21,5 @@ $title = 'Departures'; include 'includes/header.php'; ?>
 <tr><td><?= e(date('H:i', strtotime($t['scheduled_departure']))) ?></td><td><?= e($t['rname']) ?></td><td><?= e($t['reg_no']) ?></td>
 <td><?= number_format((float)current_fare($pdo, (int)$t['route_id'], $date), 2) ?></td><td><?= $left > 0 ? $left : 'Full' ?></td></tr>
 <?php endforeach; if (!$trips): ?><tr><td colspan="5">No departures found for the chosen filters.</td></tr><?php endif; ?></tbody></table>
-<p>Passengers can <a href="book.php">reserve a seat</a> using the demo flow. It records a simulated receipt only; no payment provider is contacted and no money is collected.</p>
+<p>Passengers can <a href="book.php">reserve a seat</a> using the simulated payment flow.</p>
 <?php include 'includes/footer.php';

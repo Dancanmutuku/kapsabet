@@ -162,7 +162,7 @@ function add_boarding(PDO $pdo, int $trip_id, int $seat, string $method, int $ui
     if ($seat < 1 || $seat > (int)$t['seat_capacity']) throw new InvalidArgumentException('Invalid seat number');
     if (!in_array($method, ['MPESA', 'CASH'], true)) throw new InvalidArgumentException('Invalid payment method');
     if ($method === 'MPESA') {
-        if (trim((string)$mpesa) !== '') throw new InvalidArgumentException('Demo mode does not accept real M-Pesa receipt codes');
+        if (trim((string)$mpesa) !== '') throw new InvalidArgumentException('Simulated payment mode does not accept real M-Pesa receipt codes');
     }
     $fare = current_fare($pdo, (int)$t['route_id']);
     if ($fare === null) throw new RuntimeException('No approved fare for this route');
@@ -171,7 +171,7 @@ function add_boarding(PDO $pdo, int $trip_id, int $seat, string $method, int $ui
     try {
         q($pdo, "INSERT INTO booking (trip_id,seat_no,channel,fare_amount,status,created_by,client_uuid) VALUES (?,?,'CONDUCTOR',?,'BOARDED',?,?)", [$trip_id, $seat, $fare, $uid, $uuid]);
         $bid = (int)$pdo->lastInsertId();
-        $rc = 'DEMO' . date('ymd') . str_pad((string)$bid, 6, '0', STR_PAD_LEFT);
+        $rc = 'SIM' . date('ymd') . str_pad((string)$bid, 6, '0', STR_PAD_LEFT);
         q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,mpesa_receipt_no,receipt_no,recorded_by) VALUES (?,?,?, ?,NULL,?,?)", [$trip_id, $bid, $fare, $method, $rc, $uid]);
         audit($pdo, $uid, 'CREATE', 'booking', $bid, null, ['seat' => $seat, 'fare' => $fare, 'method' => $method]);
         if ($own) $pdo->commit();
@@ -183,7 +183,7 @@ function add_boarding(PDO $pdo, int $trip_id, int $seat, string $method, int $ui
     }
 }
 
-function add_demo_reservation(PDO $pdo, int $trip_id, int $seat, string $name, string $phone, bool $consent): array {
+function add_simulated_reservation(PDO $pdo, int $trip_id, int $seat, string $name, string $phone, bool $consent): array {
     $name = trim($name);
     $phone = normalize_phone($phone);
     if ($name === '') throw new InvalidArgumentException('Passenger name is required');
@@ -210,10 +210,10 @@ function add_demo_reservation(PDO $pdo, int $trip_id, int $seat, string $name, s
         q($pdo, "INSERT INTO booking (trip_id,passenger_id,seat_no,channel,fare_amount,status,client_uuid)
                  VALUES (?,?,?,'ONLINE',?,'CONFIRMED',?)", [$trip_id, $passenger, $seat, $fare, $uuid]);
         $booking = (int)$pdo->lastInsertId();
-        $reference = 'DEMO' . date('ymd') . str_pad((string)$booking, 6, '0', STR_PAD_LEFT);
+        $reference = 'SIM' . date('ymd') . str_pad((string)$booking, 6, '0', STR_PAD_LEFT);
         q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,status,receipt_no)
                  VALUES (?,?,?,'MPESA','SUCCESS',?)", [$trip_id, $booking, $fare, $reference]);
-        audit($pdo, null, 'CREATE', 'booking', $booking, null, ['seat' => $seat, 'fare' => $fare, 'channel' => 'ONLINE', 'payment' => 'DEMO']);
+        audit($pdo, null, 'CREATE', 'booking', $booking, null, ['seat' => $seat, 'fare' => $fare, 'channel' => 'ONLINE', 'payment' => 'SIMULATED']);
         if ($own) $pdo->commit();
         return ['booking_id' => $booking, 'reference' => $reference, 'fare' => $fare];
     } catch (Throwable $t) {
@@ -236,12 +236,12 @@ function check_in_reservation(PDO $pdo, int $trip_id, int $booking_id, int $uid)
         if ($payment) {
             $receipt = $payment['receipt_no'];
         } else {
-            $receipt = 'DEMO' . date('ymd') . str_pad((string)$booking_id, 6, '0', STR_PAD_LEFT);
+            $receipt = 'SIM' . date('ymd') . str_pad((string)$booking_id, 6, '0', STR_PAD_LEFT);
             q($pdo, "INSERT INTO payment (trip_id,booking_id,amount,method,status,receipt_no)
                      VALUES (?,?,?,'MPESA','SUCCESS',?)", [$trip_id, $booking_id, $b['fare_amount'], $receipt]);
         }
         q($pdo, "UPDATE booking SET status='BOARDED' WHERE id=?", [$booking_id]);
-        audit($pdo, $uid, 'UPDATE', 'booking', $booking_id, ['status' => 'CONFIRMED'], ['status' => 'BOARDED', 'payment' => 'DEMO']);
+        audit($pdo, $uid, 'UPDATE', 'booking', $booking_id, ['status' => 'CONFIRMED'], ['status' => 'BOARDED', 'payment' => 'SIMULATED']);
         if ($own) $pdo->commit();
         return $receipt;
     } catch (Throwable $t) {
@@ -250,9 +250,13 @@ function check_in_reservation(PDO $pdo, int $trip_id, int $booking_id, int $uid)
     }
 }
 
-function find_demo_reservation(PDO $pdo, string $reference, string $phone): ?array {
+function is_simulated_reference(string $reference): bool {
+    return (bool)preg_match('/^(?:SIM\d{12,}|[A-Z]{4}\d{12,})$/', strtoupper(trim($reference)));
+}
+
+function find_simulated_reservation(PDO $pdo, string $reference, string $phone): ?array {
     $phone = normalize_phone($phone);
-    if (!$phone || !preg_match('/^DEMO[A-Z0-9]+$/', strtoupper(trim($reference)))) return null;
+    if (!$phone || !is_simulated_reference($reference)) return null;
     $r = q($pdo, "SELECT b.id AS booking_id,b.trip_id,b.seat_no,b.fare_amount,b.status AS booking_status,
                   t.status AS trip_status,t.scheduled_departure,p.status AS payment_status,p.receipt_no,
                   CONCAT(o.stage_name,' to ',d.stage_name) AS route_name
@@ -265,10 +269,10 @@ function find_demo_reservation(PDO $pdo, string $reference, string $phone): ?arr
     return $r ?: null;
 }
 
-function cancel_demo_reservation(PDO $pdo, string $reference, string $phone): void {
+function cancel_simulated_reservation(PDO $pdo, string $reference, string $phone): void {
     $reference = strtoupper(trim($reference));
     $phone = normalize_phone($phone);
-    if (!$phone || !preg_match('/^DEMO[A-Z0-9]+$/', $reference)) throw new InvalidArgumentException('Reservation reference or phone number is invalid');
+    if (!$phone || !is_simulated_reference($reference)) throw new InvalidArgumentException('Reservation reference or phone number is invalid');
     $own = !$pdo->inTransaction();
     if ($own) $pdo->beginTransaction();
     try {
@@ -282,7 +286,7 @@ function cancel_demo_reservation(PDO $pdo, string $reference, string $phone): vo
         }
         q($pdo, "UPDATE payment SET status='REVERSED' WHERE id=?", [$r['payment_id']]);
         q($pdo, "UPDATE booking SET status='CANCELLED' WHERE id=?", [$r['id']]);
-        audit($pdo, null, 'UPDATE', 'booking', (int)$r['id'], ['status' => 'CONFIRMED'], ['status' => 'CANCELLED', 'payment' => 'DEMO_REVERSED']);
+        audit($pdo, null, 'UPDATE', 'booking', (int)$r['id'], ['status' => 'CONFIRMED'], ['status' => 'CANCELLED', 'payment' => 'SIMULATED_REVERSED']);
         if ($own) $pdo->commit();
     } catch (Throwable $t) {
         if ($own) $pdo->rollBack();

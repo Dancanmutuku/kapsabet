@@ -70,9 +70,9 @@ $dup = add_boarding($pdo, $trip, 1, 'CASH', $uid, null, 'uuid-test-0000000000000
 check('offline resend with same client uuid is ignored', !empty($dup['duplicate']) && seats_left($pdo, $trip) === 13);
 check('same seat cannot be booked twice', throws(fn() => add_boarding($pdo, $trip, 1, 'CASH', $uid)));
 $b2 = add_boarding($pdo, $trip, 2, 'MPESA', $uid);
-$demoPayment = q($pdo, "SELECT mpesa_receipt_no,receipt_no FROM payment WHERE booking_id=?", [$b2['booking_id']])->fetch();
-check('demo boarding stores a labeled receipt but no real M-Pesa code', $demoPayment['mpesa_receipt_no'] === null && strpos($demoPayment['receipt_no'], 'DEMO') === 0);
-check('real M-Pesa receipt codes are rejected in demo mode', throws(fn() => add_boarding($pdo, $trip, 3, 'MPESA', $uid, 'QWE1234567')));
+$simulatedPayment = q($pdo, "SELECT mpesa_receipt_no,receipt_no FROM payment WHERE booking_id=?", [$b2['booking_id']])->fetch();
+check('simulated boarding stores a labeled receipt but no real M-Pesa code', $simulatedPayment['mpesa_receipt_no'] === null && strpos($simulatedPayment['receipt_no'], 'SIM') === 0);
+check('real M-Pesa receipt codes are rejected in simulated mode', throws(fn() => add_boarding($pdo, $trip, 3, 'MPESA', $uid, 'QWE1234567')));
 for ($s = 3; $s <= 14; $s++) add_boarding($pdo, $trip, $s, 'CASH', $uid);
 check('vehicle full after 14 passengers', seats_left($pdo, $trip) === 0);
 check('15th passenger blocked', throws(fn() => add_boarding($pdo, $trip, 1, 'CASH', $uid)));
@@ -83,30 +83,30 @@ check('boarding blocked after departure', throws(fn() => add_boarding($pdo, $tri
 check('wrong cash count gives MISMATCH', close_trip($pdo, $trip, 3000, $uid) === 'MISMATCH');
 $q3 = register_queue($pdo, $v1, $testStage2, $uid);
 $t2 = open_trip($pdo, $q3, $drv, $cnd, $testRoute2, date('Y-m-d H:i:s', strtotime('+1 hour')), $uid);
-$reservation = add_demo_reservation($pdo, $t2, 4, 'Test Passenger', '0722000099', true);
-check('demo reservation creates a confirmed booking and simulated receipt', strpos($reservation['reference'], 'DEMO') === 0
+$reservation = add_simulated_reservation($pdo, $t2, 4, 'Test Passenger', '0722000099', true);
+check('reservation creates a confirmed booking and simulated receipt', strpos($reservation['reference'], 'SIM') === 0
     && q($pdo, "SELECT status FROM booking WHERE id=?", [$reservation['booking_id']])->fetch()['status'] === 'CONFIRMED');
 $reservationPayment = q($pdo, "SELECT status,method,mpesa_receipt_no,receipt_no FROM payment WHERE booking_id=?", [$reservation['booking_id']])->fetch();
 check('reservation persists a clearly labeled simulated payment', $reservationPayment['status'] === 'SUCCESS'
     && $reservationPayment['method'] === 'MPESA' && $reservationPayment['mpesa_receipt_no'] === null
     && $reservationPayment['receipt_no'] === $reservation['reference']);
 check('reserved seat cannot be sold again', throws(fn() => add_boarding($pdo, $t2, 4, 'CASH', $uid)));
-check('reservation requires phone consent', throws(fn() => add_demo_reservation($pdo, $t2, 6, 'Test Passenger', '0722000098', false)));
-$noShow = add_demo_reservation($pdo, $t2, 6, 'No Show', '0722000098', true);
-$cancelled = add_demo_reservation($pdo, $t2, 7, 'Cancelled Passenger', '0722000097', true);
-check('passenger can find reservation using receipt and phone', find_demo_reservation($pdo, $cancelled['reference'], '0722 000 097')['booking_id'] == $cancelled['booking_id']
-    && find_demo_reservation($pdo, $cancelled['reference'], '0722000000') === null);
-cancel_demo_reservation($pdo, $cancelled['reference'], '0722000097');
-check('passenger cancellation releases seat and reverses demo payment', q($pdo, "SELECT status FROM booking WHERE id=?", [$cancelled['booking_id']])->fetch()['status'] === 'CANCELLED'
+check('reservation requires phone consent', throws(fn() => add_simulated_reservation($pdo, $t2, 6, 'Test Passenger', '0722000098', false)));
+$noShow = add_simulated_reservation($pdo, $t2, 6, 'No Show', '0722000098', true);
+$cancelled = add_simulated_reservation($pdo, $t2, 7, 'Cancelled Passenger', '0722000097', true);
+check('passenger can find reservation using receipt and phone', find_simulated_reservation($pdo, $cancelled['reference'], '0722 000 097')['booking_id'] == $cancelled['booking_id']
+    && find_simulated_reservation($pdo, $cancelled['reference'], '0722000000') === null);
+cancel_simulated_reservation($pdo, $cancelled['reference'], '0722000097');
+check('passenger cancellation releases seat and reverses simulated payment', q($pdo, "SELECT status FROM booking WHERE id=?", [$cancelled['booking_id']])->fetch()['status'] === 'CANCELLED'
     && q($pdo, "SELECT status FROM payment WHERE booking_id=?", [$cancelled['booking_id']])->fetch()['status'] === 'REVERSED'
-    && add_demo_reservation($pdo, $t2, 7, 'Replacement Passenger', '0722000096', true)['booking_id'] > 0);
-$demoReceipt = check_in_reservation($pdo, $t2, $reservation['booking_id'], $uid);
-check('reservation check-in preserves the same simulated receipt', $demoReceipt === $reservation['reference']
+    && add_simulated_reservation($pdo, $t2, 7, 'Replacement Passenger', '0722000096', true)['booking_id'] > 0);
+$simulatedReceipt = check_in_reservation($pdo, $t2, $reservation['booking_id'], $uid);
+check('reservation check-in preserves the same simulated receipt', $simulatedReceipt === $reservation['reference']
     && (int)q($pdo, "SELECT COUNT(*) c FROM payment WHERE booking_id=?", [$reservation['booking_id']])->fetch()['c'] === 1);
 check('reservation cannot be checked in twice', throws(fn() => check_in_reservation($pdo, $t2, $reservation['booking_id'], $uid)));
 add_boarding($pdo, $t2, 5, 'CASH', $uid); confirm_departure($pdo, $t2, 100, $uid);
 check('unclaimed reservation expires at departure', q($pdo, "SELECT status FROM booking WHERE id=?", [$noShow['booking_id']])->fetch()['status'] === 'EXPIRED');
-check('unclaimed demo payment is reversed at departure', q($pdo, "SELECT status FROM payment WHERE booking_id=?", [$noShow['booking_id']])->fetch()['status'] === 'REVERSED');
+check('unclaimed simulated payment is reversed at departure', q($pdo, "SELECT status FROM payment WHERE booking_id=?", [$noShow['booking_id']])->fetch()['status'] === 'REVERSED');
 check('correct cash count gives RECONCILED', close_trip($pdo, $t2, $returnFare, $uid) === 'RECONCILED');
 check('audit log recorded actions', (int)q($pdo, "SELECT COUNT(*) c FROM audit_log WHERE user_id=?", [$uid])->fetch()['c'] > 10);
 $fid = submit_feedback($pdo, null, "KZ{$sfx} 111T", 'COMPLAINT', 2, 'Overcharged', '0722000000', true);
